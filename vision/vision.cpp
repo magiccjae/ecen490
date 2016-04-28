@@ -1,0 +1,841 @@
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#include <stdio.h>
+#include <iostream>
+#include <math.h>
+#include <time.h>
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+
+
+#include <sstream>
+
+#include <opencv2/core/core.hpp>
+#include <opencv2/calib3d/calib3d.hpp>
+
+
+using namespace cv;
+using namespace std;
+
+
+#define PI 3.141592
+#define PACKET_DELAY 0
+#define HTHRESHOLD 20
+#define STHRESHOLD 70
+#define VTHRESHOLD 70
+
+
+enum color {NONE, BLUE, GREEN, RED, PURPLE};
+
+color player1Color = NONE;
+color player2Color = NONE;
+color enemy1Color = NONE;
+color enemy2Color = NONE;
+
+enum set_state_t {SET_BALL, SET_PLAYER1, SET_PLAYER2, SET_ENEMY1, SET_ENEMY2, NOSTATE};
+
+Mat cameraMatrix, distCoeffs, newCameraMatrix, map1, map2;
+Size size;
+int m1type;
+
+set_state_t setState = NOSTATE;
+
+int iLowHPlayer1;
+int iHighHPlayer1;
+int iLowSPlayer1;
+int iHighSPlayer1;
+int iLowVPlayer1;
+int iHighVPlayer1;
+
+int iLowHPlayer2;
+int iHighHPlayer2;
+int iLowSPlayer2;
+int iHighSPlayer2;
+int iLowVPlayer2;
+int iHighVPlayer2;
+
+int iLowHEnemy1;
+int iHighHEnemy1;
+int iLowSEnemy1;
+int iHighSEnemy1;
+int iLowVEnemy1;
+int iHighVEnemy1;
+
+int iLowHEnemy2;
+int iHighHEnemy2;
+int iLowSEnemy2;
+int iHighSEnemy2;
+int iLowVEnemy2;
+int iHighVEnemy2;
+
+int iLowHBall = 8;
+int iHighHBall = 79; //60;
+int iLowSBall = 28;
+int iHighSBall = 255;
+int iLowVBall = 76; //64 at night, 195 at day
+int iHighVBall = 255;
+
+int field1X = 62;
+int field1Y = 65;
+
+int field2X = 770;
+int field2Y = 564;
+
+int fieldWidth = 1;
+int fieldHeight = 1;
+
+int packetDelay = PACKET_DELAY;
+
+bool running = false;
+
+//-------------------------- Used for mouse clicking
+typedef struct {
+    double r;       // percent
+    double g;       // percent
+    double b;       // percent
+} rgb;
+
+typedef struct {
+    double h;       // angle in degrees
+    double s;       // percent
+    double v;       // percent
+} hsv;
+
+rgb myRGBStruct;
+hsv myHSVStruct;
+
+static hsv rgb2hsv(rgb in);
+static rgb hsv2rgb(hsv in);
+
+hsv rgb2hsv(rgb in)
+{
+    hsv         out;
+    double      min, max, delta;
+
+    min = in.r < in.g ? in.r : in.g;
+    min = min  < in.b ? min  : in.b;
+
+    max = in.r > in.g ? in.r : in.g;
+    max = max  > in.b ? max  : in.b;
+
+    out.v = max;                                // v
+    delta = max - min;
+    if( max > 0.0 ) { // NOTE: if Max is == 0, this divide would cause a crash
+        out.s = (delta / max);                  // s
+    } else {
+        // if max is 0, then r = g = b = 0              
+            // s = 0, v is undefined
+        out.s = 0.0;
+        out.h = NAN;                            // its now undefined
+        return out;
+    }
+    if( in.r >= max )                           // > is bogus, just keeps compilor happy
+        out.h = ( in.g - in.b ) / delta;        // between yellow & magenta
+    else
+    if( in.g >= max )
+        out.h = 2.0 + ( in.b - in.r ) / delta;  // between cyan & yellow
+    else
+        out.h = 4.0 + ( in.r - in.g ) / delta;  // between magenta & cyan
+
+    out.h *= 60.0;                              // degrees
+
+    if( out.h < 0.0 )
+        out.h += 360.0;
+
+    return out;
+}
+
+
+void mouseEvent(int evt, int x, int y, int flags, void* param) {                   
+    Mat* image = (Mat*) param;
+    if (evt == CV_EVENT_LBUTTONDOWN) {
+		int blue = 0;
+		int green = 0;
+		int red = 0;
+
+		// Average nearby image pixel RGBs
+		for (int i = -1; i <= 1; i++) {
+			for (int j = -1; j <= 1; j++) {
+				Vec3b pixel = image->at<Vec3b>(y+i, x+j);				
+				blue += pixel.val[0];
+				green += pixel.val[1];
+				red += pixel.val[2];
+			}
+		}
+
+		blue /= 9;
+		red /= 9;
+		green /= 9;
+		//----------------------------------
+
+		myRGBStruct.b = blue;
+		myRGBStruct.r = red;
+		myRGBStruct.g = green;
+
+		myHSVStruct = rgb2hsv(myRGBStruct);
+
+		switch (setState) {
+		case SET_BALL:
+			iLowHBall = myHSVStruct.h/2 - HTHRESHOLD;
+			iHighHBall = myHSVStruct.h/2 + HTHRESHOLD;
+			iLowSBall = myHSVStruct.s*255 - STHRESHOLD;
+			iHighSBall = myHSVStruct.s*255 + STHRESHOLD;
+			iLowVBall = myHSVStruct.v - VTHRESHOLD;
+			iHighVBall = myHSVStruct.v + VTHRESHOLD;
+
+			if (iHighHBall > 255) iHighHBall = 255;
+			if (iHighSBall > 255) iHighSBall = 255;
+			if (iHighVBall > 255) iHighVBall = 255;
+			if (iLowHBall < 0) iLowHBall = 0;
+			if (iLowSBall < 0) iLowSBall = 0;
+			if (iLowVBall < 0) iLowVBall = 0;
+			
+			break;
+		case SET_PLAYER1:
+			iLowHPlayer1 = myHSVStruct.h/2 - HTHRESHOLD;
+			iHighHPlayer1 = myHSVStruct.h/2 + HTHRESHOLD;
+			iLowSPlayer1 = myHSVStruct.s*255 - STHRESHOLD;
+			iHighSPlayer1 = myHSVStruct.s*255 + STHRESHOLD;
+			iLowVPlayer1 = myHSVStruct.v - VTHRESHOLD;
+			iHighVPlayer1 = myHSVStruct.v + VTHRESHOLD;
+
+			if (iHighHPlayer1 > 255) iHighHPlayer1 = 255;
+			if (iHighSPlayer1 > 255) iHighSPlayer1 = 255;
+			if (iHighVPlayer1 > 255) iHighVPlayer1 = 255;
+			if (iLowHPlayer1 < 0) iLowHPlayer1 = 0;
+			if (iLowSPlayer1 < 0) iLowSPlayer1 = 0;
+			if (iLowVPlayer1 < 0) iLowVPlayer1 = 0;
+			break;
+		case SET_PLAYER2:
+
+			break;
+		case SET_ENEMY1:
+			iLowHEnemy1 = myHSVStruct.h/2 - HTHRESHOLD;
+			iHighHEnemy1 = myHSVStruct.h/2 + HTHRESHOLD;
+			iLowSEnemy1 = myHSVStruct.s*255 - STHRESHOLD;
+			iHighSEnemy1 = myHSVStruct.s*255 + STHRESHOLD;
+			iLowVEnemy1 = myHSVStruct.v - VTHRESHOLD;
+			iHighVEnemy1 = myHSVStruct.v + VTHRESHOLD;
+
+			if (iHighHEnemy1 > 255) iHighHEnemy1 = 255;
+			if (iHighSEnemy1 > 255) iHighSEnemy1 = 255;
+			if (iHighVEnemy1 > 255) iHighVEnemy1 = 255;
+			if (iLowHEnemy1 < 0) iLowHEnemy1 = 0;
+			if (iLowSEnemy1 < 0) iLowSEnemy1 = 0;
+			if (iLowVEnemy1 < 0) iLowVEnemy1 = 0;
+
+			break;
+		case SET_ENEMY2:
+
+			break;
+		default:
+
+			break;
+		}
+	
+		setState = NOSTATE;
+		//running = true;
+    }        
+}
+//------------------------ Used for mouse clicking
+
+void setColors() {
+	switch (player1Color) {
+		case NONE:
+
+			break;
+		case RED:
+
+			iLowHPlayer1 = 114;
+			iHighHPlayer1 = 179;
+			iLowSPlayer1 = 77;
+			iHighSPlayer1 = 190;
+			iLowVPlayer1 = 222;
+			iHighVPlayer1 = 255;
+
+			break;
+		case BLUE:
+
+			iLowHPlayer1 = 94;
+			iHighHPlayer1 = 135;
+			iLowSPlayer1 = 180;
+			iHighSPlayer1 = 255;
+			iLowVPlayer1 = 167;
+			iHighVPlayer1 = 255;
+
+			break;
+		case GREEN:
+
+			iLowHPlayer1 = 62;
+			iHighHPlayer1 = 107;
+			iLowSPlayer1 = 166;
+			iHighSPlayer1 = 242;
+			iLowVPlayer1 = 197;
+			iHighVPlayer1 = 255;
+
+			break;
+		case PURPLE:
+
+			iLowHPlayer1 = 112;
+			iHighHPlayer1 = 133;
+			iLowSPlayer1 = 86;
+			iHighSPlayer1 = 201; //169;
+			iLowVPlayer1 = 200;
+			iHighVPlayer1 = 255;
+			break;
+		default:
+
+			break;
+	}
+
+	switch (player2Color) {
+		case NONE:
+
+			break;
+		case RED:
+
+			iLowHPlayer2 = 114;
+			iHighHPlayer2 = 179;
+			iLowSPlayer2 = 77;
+			iHighSPlayer2 = 190;
+			iLowVPlayer2 = 222;
+			iHighVPlayer2 = 255;
+
+			break;
+		case BLUE:
+
+			iLowHPlayer2 = 94;
+			iHighHPlayer2 = 135;
+			iLowSPlayer2 = 180;
+			iHighSPlayer2 = 255;
+			iLowVPlayer2 = 167;
+			iHighVPlayer2 = 255;
+
+			break;
+		case GREEN:
+
+			iLowHPlayer2 = 62;
+			iHighHPlayer2 = 107;
+			iLowSPlayer2 = 166;
+			iHighSPlayer2 = 242;
+			iLowVPlayer2 = 197;
+			iHighVPlayer2 = 255;
+
+			break;
+		case PURPLE:
+
+			iLowHPlayer1 = 112;
+			iHighHPlayer1 = 133;
+			iLowSPlayer1 = 86;
+			iHighSPlayer1 = 201; //169;
+			iLowVPlayer1 = 200;
+			iHighVPlayer1 = 255;
+			break;
+		default:
+
+			break;
+	}
+
+	switch (enemy1Color) {
+		case NONE:
+
+			break;
+		case RED:
+
+			iLowHEnemy1 = 114;
+			iHighHEnemy1 = 179;
+			iLowSEnemy1 = 77;
+			iHighSEnemy1 = 190;
+			iLowVEnemy1 = 222;
+			iHighVEnemy1 = 255;
+
+			break;
+		case BLUE:
+
+			iLowHEnemy1 = 94;
+			iHighHEnemy1 = 135;
+			iLowSEnemy1 = 180;
+			iHighSEnemy1 = 255;
+			iLowVEnemy1 = 167;
+			iHighVEnemy1 = 255;
+
+			break;
+		case GREEN:
+
+			iLowHEnemy1 = 62;
+			iHighHEnemy1 = 107;
+			iLowSEnemy1 = 166;
+			iHighSEnemy1 = 242;
+			iLowVEnemy1 = 197;
+			iHighVEnemy1 = 255;
+
+			break;
+		case PURPLE:
+
+			iLowHPlayer1 = 112;
+			iHighHPlayer1 = 133;
+			iLowSPlayer1 = 86;
+			iHighSPlayer1 = 201; //169;
+			iLowVPlayer1 = 200;
+			iHighVPlayer1 = 255;
+			break;
+		default:
+
+			break;
+	}
+
+	switch (enemy2Color) {
+		case NONE:
+
+			break;
+		case RED:
+
+			iLowHEnemy2 = 114;
+			iHighHEnemy2 = 179;
+			iLowSEnemy2 = 77;
+			iHighSEnemy2 = 190;
+			iLowVEnemy2 = 222;
+			iHighVEnemy2 = 255;
+
+			break;
+		case BLUE:
+
+			iLowHEnemy2 = 94;
+			iHighHEnemy2 = 135;
+			iLowSEnemy2 = 180;
+			iHighSEnemy2 = 255;
+			iLowVEnemy2 = 167;
+			iHighVEnemy2 = 255;
+
+			break;
+		case GREEN:
+
+			iLowHEnemy2 = 62;
+			iHighHEnemy2 = 107;
+			iLowSEnemy2 = 166;
+			iHighSEnemy2 = 242;
+			iLowVEnemy2 = 197;
+			iHighVEnemy2 = 255;
+
+			break;
+		case PURPLE:
+
+			iLowHPlayer1 = 112;
+			iHighHPlayer1 = 133;
+			iLowSPlayer1 = 86;
+			iHighSPlayer1 = 201; //169;
+			iLowVPlayer1 = 200;
+			iHighVPlayer1 = 255;
+			break;
+		default:
+
+			break;
+		}
+		
+}
+
+
+int main( int argc, char** argv ) {
+
+
+
+	if(argc == 5) {
+
+		string arg1 = argv[1];
+		string arg2 = argv[2];
+		string arg3 = argv[3];
+		string arg4 = argv[4];
+
+		if (arg1 == "r") player1Color = RED;
+		else if (arg1 == "b") player1Color = BLUE;
+		else if (arg1 == "g") player1Color = GREEN;
+		else if (arg1 == "p") player1Color = PURPLE;
+		else player1Color = NONE;
+
+		if (arg2 == "r") player2Color = RED;
+		else if (arg2 == "b") player2Color = BLUE;
+		else if (arg2 == "g") player2Color = GREEN;
+		else if (arg2 == "p") player2Color = PURPLE;
+		else player2Color = NONE;
+
+		if (arg3 == "r") enemy1Color = RED;
+		else if (arg3 == "b") enemy1Color = BLUE;
+		else if (arg3 == "g") enemy1Color = GREEN;
+		else if (arg3 == "p") enemy1Color = PURPLE;
+		else enemy1Color = NONE;
+
+		if (arg4 == "r") enemy2Color = RED;
+		else if (arg4 == "b") enemy2Color = BLUE;
+		else if (arg4 == "g") enemy2Color = GREEN;
+		else if (arg4 == "p") enemy2Color = PURPLE;
+		else enemy2Color = NONE;
+	}
+	else {
+		printf("Wrong number of parameters:\nColors: Player1, Player2, Enemy1, Enemy2");
+		return 0;
+	}
+
+	setColors();
+
+	VideoCapture cap("http://192.168.1.90/mjpg/video.mjpg");
+
+	// Get temp image size
+	Mat startImage;
+	cap.read(startImage);
+
+	namedWindow("Control", CV_WINDOW_AUTOSIZE); //create a window called "Control"
+	namedWindow("Original",CV_WINDOW_AUTOSIZE);
+	//namedWindow("Thresholded Image Ball",CV_WINDOW_AUTOSIZE);
+	//namedWindow("Thresholded Image Player1",CV_WINDOW_AUTOSIZE);
+
+	
+	imshow("Original", startImage); //show the original image
+
+	//Ball ball: 0, 77, 0, 23, 226, 255
+	//Player1 robot: 130, 154, 0, 43, 231, 255
+
+
+	//Create trackbars in "Control" window
+	createTrackbar("Player 1 LowH", "Control", &iLowHPlayer1, 179); //Hue (0 - 179)
+	createTrackbar("Player 1 HighH", "Control", &iHighHPlayer1, 179);
+	
+	createTrackbar("Player 1 LowS", "Control", &iLowSPlayer1, 255); //Saturation (0 - 255)
+	createTrackbar("Player 1 HighS", "Control", &iHighSPlayer1, 255);
+	
+	createTrackbar("Player 1 LowV", "Control", &iLowVPlayer1, 255);//Value (0 - 255)
+	createTrackbar("Player 1 HighV", "Control", &iHighVPlayer1, 255);
+
+	createTrackbar("Enemy 1 LowH", "Control", &iLowHPlayer1, 179); //Hue (0 - 179)
+	createTrackbar("Enemy 1 HighH", "Control", &iHighHPlayer1, 179);
+	
+	createTrackbar("Enemy 1 LowS", "Control", &iLowSPlayer1, 255); //Saturation (0 - 255)
+	createTrackbar("Enemy 1 HighS", "Control", &iHighSPlayer1, 255);
+	
+	createTrackbar("Enemy 1 LowV", "Control", &iLowVPlayer1, 255);//Value (0 - 255)
+	createTrackbar("Enemy 1 HighV", "Control", &iHighVPlayer1, 255);
+
+	createTrackbar("Ball LowH", "Control", &iLowHBall, 359); //Hue (0 - 179)
+	createTrackbar("Ball HighH", "Control", &iHighHBall, 359);
+	
+	createTrackbar("Ball LowS", "Control", &iLowSBall, 255); //Saturation (0 - 255)
+	createTrackbar("Ball HighS", "Control", &iHighSBall, 255);
+	
+	createTrackbar("Ball LowV", "Control", &iLowVBall, 255);//Value (0 - 255)
+	createTrackbar("Ball HighV", "Control", &iHighVBall, 255);
+
+	createTrackbar("Top Left Field X", "Control", &field1X, 800);
+	createTrackbar("Top Left Field Y", "Control", &field1Y, 600);
+	
+	createTrackbar("Bottom Right Field X", "Control", &field2X, 800);
+	createTrackbar("Bottom Right Field Y", "Control", &field2Y, 600);
+	
+	int iLastX = -1; 
+	int iLastY = -1;
+
+	//initUndistortRectifyMap(cameraMatrix, distCoeffs, Size(1280, 740), CV_16SC2, map1, map2);
+
+
+	/*imshow("Original", startImage); 
+	
+	while (true) {
+		if (waitKey(1) == 13) { //Enter?
+			if (setState == NOSTATE) break; 
+		}
+	}*/
+		
+
+
+	while (true)
+	{
+		//system("wget -q \"http://192.168.1.222/admin-bin/ccam.cgi?opt=vxyhc&ww=2048&wh=1536\" -O image.jpg");
+
+		//Prepare field dimensions
+		Point2f topLeft = Point(field1X, field1Y);
+		Point2f topRight = Point(field2X, field2Y);
+
+		fieldWidth = field2X - field1X;
+		fieldHeight = field2Y - field1Y;
+
+
+		Mat orig, distorted, src;
+        cap.grab();		
+		//cap.read(src);
+        cap >> orig;
+
+
+
+		Mat intrinsic = (Mat_<double>(3,3) << 5.1314846582801022e+02, 0, 3.1558730401691332e+02, 0, 5.1394244582336182e+02, 2.6671553993693823e+02, 0, 0, 1);
+		Mat distortion = (Mat_<double>(5,1) << -3.6477907232256079e-01, 1.8476332607237927e-01, 3.9894289612051551e-03, -3.3921806480293636e-04, -6.1411439476998939e-02);
+
+		//undistort(distorted, src, intrinsic, distortion); 
+
+		//Mat temp = distorted.clone();
+		newCameraMatrix = intrinsic.clone();
+		newCameraMatrix.at<double>(0,2) += 80;
+		newCameraMatrix.at<double>(1,2) += 70;
+		initUndistortRectifyMap(intrinsic, distortion, Mat(), newCameraMatrix, Size(800,600), CV_16SC2, map1, map2);
+		remap(orig, src, map1, map2, INTER_LINEAR);
+
+
+
+		setMouseCallback("Original", mouseEvent, &src);
+
+
+
+		Mat imgHSV;
+
+		cvtColor(src, imgHSV, COLOR_BGR2HSV); //Convert the captured frame from BGR to HSV
+
+		Mat threshPlayer1;
+		Mat threshEnemy1;
+		Mat threshBall;
+		
+		//Threshold the images
+		inRange(imgHSV, Scalar(iLowHPlayer1, iLowSPlayer1, iLowVPlayer1), Scalar(iHighHPlayer1, iHighSPlayer1, iHighVPlayer1), threshPlayer1); 
+		inRange(imgHSV, Scalar(iLowHEnemy1, iLowSEnemy1, iLowVEnemy1), Scalar(iHighHEnemy1, iHighSEnemy1, iHighVEnemy1), threshEnemy1); 
+		inRange(imgHSV, Scalar(iLowHBall, iLowSBall, iLowVBall), Scalar(iHighHBall, iHighSBall, iHighVBall), threshBall); 
+			  
+		//morphological opening (removes small objects from the foreground)
+		erode(threshPlayer1, threshPlayer1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate(threshPlayer1, threshPlayer1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		erode(threshEnemy1, threshEnemy1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate(threshEnemy1, threshEnemy1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		erode(threshBall, threshBall, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate(threshBall, threshBall, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );  
+
+		//morphological closing (removes small holes from the foreground)
+		erode(threshPlayer1, threshPlayer1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate( threshPlayer1, threshPlayer1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) ); 
+		erode(threshEnemy1, threshEnemy1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate( threshEnemy1, threshEnemy1, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) ); 
+		erode(threshBall, threshBall, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) );
+		dilate( threshBall, threshBall, getStructuringElement(MORPH_ELLIPSE, Size(2, 2)) ); 
+
+
+
+		vector<vector<Point> > ballContours; // Vector for storing contour
+    	vector<Vec4i> ballHierarchy;
+
+
+	    findContours(threshBall, ballContours, ballHierarchy, CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+		
+		int largest_contour_index_ball = 0;
+		int largest_area_ball = 0;
+		Rect bounding_rect_large_ball;
+
+		// Find ball code ----------------------------------
+		// Find big ball dot
+		for( int i = 0; i< ballContours.size(); i++) {
+        	//Find the area of contour
+        	double a = contourArea(ballContours[i]);
+        	if(a > largest_area_ball){			
+            	largest_area_ball = a;
+            	largest_contour_index_ball = i;              
+	            bounding_rect_large_ball=boundingRect(ballContours[i]);
+	        }
+	    }
+
+		int x1_ball = (2 * bounding_rect_large_ball.x + bounding_rect_large_ball.width)/2;		
+		int y1_ball = (2 * bounding_rect_large_ball.y + bounding_rect_large_ball.height)/2;	
+		// Find ball code ----------------------------------
+
+
+		// Player 1 robot ---------------------------------
+		vector<vector<Point> > player1Contours; // Vector for storing contour
+    	vector<Vec4i> player1Hierarchy;
+
+	    findContours(threshPlayer1, player1Contours, player1Hierarchy,CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+		
+		int largest_contour_index_player1 = 0;
+		int next_largest_contour_index_player1 = 0;
+		int largest_area_player1 = 0;
+		int next_largest_area_player1 = 0;
+		Rect bounding_rect_large_player1;
+		Rect bounding_rect_next_large_player1;
+
+		// Find big Player1 dot
+		for( int i = 0; i< player1Contours.size(); i++) {
+        	//Find the area of contour
+        	double a = contourArea(player1Contours[i]);
+        	if(a > largest_area_player1){			
+            	largest_area_player1 = a;
+            	largest_contour_index_player1 = i;              
+	            bounding_rect_large_player1=boundingRect(player1Contours[i]);
+	        }
+	    }
+		
+		// Find small Player1 dot (second biggest)
+		for(int i = 0; i< player1Contours.size(); i++) {
+        	//Find the area of contour
+        	double a = contourArea(player1Contours[i]);
+        	if(a > next_largest_area_player1 && a < largest_area_player1){
+            	next_largest_area_player1 = a;
+            	next_largest_contour_index_player1 = i;              
+	            bounding_rect_next_large_player1 = boundingRect(player1Contours[i]);
+	        }
+	    }
+
+		int x1_player1 = (2 * bounding_rect_large_player1.x + bounding_rect_large_player1.width)/2;		
+		int y1_player1 = (2 * bounding_rect_large_player1.y + bounding_rect_large_player1.height)/2;		
+		int x2_player1 = (2 * bounding_rect_next_large_player1.x + bounding_rect_next_large_player1.width)/2;		
+		int y2_player1 = (2 * bounding_rect_next_large_player1.y + bounding_rect_next_large_player1.height)/2;
+
+		int deltaY_player1 = y2_player1 - y1_player1;
+		int deltaX_player1 = x2_player1 - x1_player1;
+		// Player 1 robot ---------------------------------
+
+		// Enemy 1 robot ---------------------------------
+		vector<vector<Point> > enemy1Contours; // Vector for storing contour
+    	vector<Vec4i> enemy1Hierarchy;
+
+	    findContours(threshEnemy1, enemy1Contours, enemy1Hierarchy,CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
+		
+		int largest_contour_index_enemy1 = 0;
+		int next_largest_contour_index_enemy1 = 0;
+		int largest_area_enemy1 = 0;
+		int next_largest_area_enemy1 = 0;
+		Rect bounding_rect_large_enemy1;
+		Rect bounding_rect_next_large_enemy1;
+
+		// Find big enemy1 dot
+		for( int i = 0; i< enemy1Contours.size(); i++) {
+        	//Find the area of contour
+        	double a = contourArea(enemy1Contours[i]);
+        	if(a > largest_area_enemy1){			
+            	largest_area_enemy1 = a;
+            	largest_contour_index_enemy1 = i;              
+	            bounding_rect_large_enemy1=boundingRect(enemy1Contours[i]);
+	        }
+	    }
+		
+		// Find small enemy1 dot (second biggest)
+		for(int i = 0; i< enemy1Contours.size(); i++) {
+        	//Find the area of contour
+        	double a = contourArea(enemy1Contours[i]);
+        	if(a > next_largest_area_enemy1 && a < largest_area_enemy1){
+            	next_largest_area_enemy1 = a;
+            	next_largest_contour_index_enemy1 = i;              
+	            bounding_rect_next_large_enemy1 = boundingRect(enemy1Contours[i]);
+	        }
+	    }
+
+		int x1_enemy1 = (2 * bounding_rect_large_enemy1.x + bounding_rect_large_enemy1.width)/2;		
+		int y1_enemy1 = (2 * bounding_rect_large_enemy1.y + bounding_rect_large_enemy1.height)/2;		
+		int x2_enemy1 = (2 * bounding_rect_next_large_enemy1.x + bounding_rect_next_large_enemy1.width)/2;		
+		int y2_enemy1 = (2 * bounding_rect_next_large_enemy1.y + bounding_rect_next_large_enemy1.height)/2;
+
+		int deltaY_enemy1 = y2_enemy1 - y1_enemy1;
+		int deltaX_enemy1 = x2_enemy1 - x1_enemy1;
+		// Enemy 1 robot ---------------------------------
+
+
+
+
+
+		double centerXR1 = ((x1_player1-field1X) - fieldWidth/2)*200/fieldWidth;
+		double centerYR1 = -((y1_player1-field1Y) - fieldHeight/2)*100/fieldHeight;
+		double angleR1 = (atan2(-deltaY_player1,deltaX_player1)) * 180 / PI;
+		if (angleR1 < 0) angleR1 += 360;
+
+		double centerXR2 = 0;
+		double centerYR2 = 0;
+		double angleR2 = 0;
+
+		double centerXE1 = ((x1_enemy1-field1X) - fieldWidth/2)*200/fieldWidth;
+		double centerYE1 = -((y1_enemy1-field1Y) - fieldHeight/2)*100/fieldHeight;
+		double angleE1 = (atan2(-deltaY_enemy1,deltaX_enemy1)) * 180 / PI;
+		if (angleE1 < 0) angleE1 += 360;
+
+		double centerXE2 = 0;
+		double centerYE2 = 0;
+		double angleE2 = 0;
+
+		double ballX = ((x1_ball-field1X) - fieldWidth/2)*200/fieldWidth;
+		double ballY = -((y1_ball-field1Y) - fieldHeight/2)*100/fieldHeight;
+
+
+
+
+		Scalar color(255,255,255);
+
+		//Draw the ball contours
+		//drawContours(src, ballContours, largest_contour_index_ball, color, CV_FILLED, 8, ballHierarchy);
+		
+		rectangle(src, bounding_rect_large_ball,  Scalar(0,255,255), 2, 8, 0);
+
+		//Draw the player 1 contours
+		//drawContours(src, player1Contours, largest_contour_index_player1, color, CV_FILLED, 8, player1Hierarchy);
+		//drawContours(src, player1Contours, next_largest_contour_index_player1, color, CV_FILLED, 8, player1Hierarchy);
+		rectangle(src, bounding_rect_large_player1,  Scalar(0,255,255), 2, 8, 0);
+		rectangle(src, bounding_rect_next_large_player1,  Scalar(0,255,255), 2, 8, 0);
+
+		// Draw the enemy 1 contours
+		//drawContours(src, enemy1Contours, largest_contour_index_enemy1, color, CV_FILLED, 8, enemy1Hierarchy);
+		//drawContours(src, enemy1Contours, next_largest_contour_index_enemy1, color, CV_FILLED, 8, enemy1Hierarchy);
+		
+		//rectangle(src, bounding_rect_large_enemy1,  Scalar(0,255,255), 2, 8, 0);
+		//rectangle(src, bounding_rect_next_large_enemy1,  Scalar(0,255,255), 2, 8, 0);
+
+		rectangle(src, topLeft, topRight, Scalar(255,0,255), 4, 8, 0);
+		if (running) {
+			if (packetDelay == 0) {
+				packetDelay = PACKET_DELAY;
+				if (ballX != -100 && ballY != 50) {
+		    		printf("{\"players\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"enemies\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"ball\": {\"x\": %f, \"y\": %f}}\n\n",centerXR1, centerYR1, angleR1, centerXR2, centerYR2, angleR2, centerXE1, centerYE1, angleE1, centerXE2, centerYE2, angleE2, ballX, ballY);	
+					fflush(stdout);
+				}
+			}
+			else packetDelay--;
+		}
+
+		imshow("Original", src); //show the original image
+
+		//imshow("Thresholded Image Player1", threshPlayer1); //show the thresholded image
+		//imshow("Thresholded Image Ball", threshBall); //show the thresholded image
+
+		//src = src + imgLines;
+		
+		int key = waitKey(1);
+
+		if (key == 27) //wait for 'esc' key press for 30ms. If 'esc' key is pressed, break loop
+		{
+			break; 
+		}
+
+		else if (key == 115) {
+			// s is pressed... START! 
+       		printf("{\"players\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"enemies\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"ball\": {\"x\": %f, \"y\": %f}}\n\n",centerXR1, centerYR1, angleR1, centerXR2, centerYR2, angleR2, centerXE1, centerYE1, angleE1, centerXE2, centerYE2, angleE2, (double) 555, (double) 555);
+			running = true;
+			setState = NOSTATE;
+		}
+
+		else if (key == 100) {
+			// d is pressed... STOP! Send ball position of 666, 666
+       		printf("{\"players\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"enemies\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"ball\": {\"x\": %f, \"y\": %f}}\n\n",centerXR1, centerYR1, angleR1, centerXR2, centerYR2, angleR2, centerXE1, centerYE1, angleE1, centerXE2, centerYE2, angleE2, (double) 666, (double) 666);	
+			fflush(stdout);
+			running = false;
+		}
+
+		else if (key == 98) {
+			running = false;
+			setState = SET_BALL;
+		}
+
+		else if (key == 114) {
+			running = false;
+			setState = SET_PLAYER1;
+		}
+
+		else if (key == 101) {
+			running = false;
+			setState = SET_ENEMY1;
+		}
+
+
+		
+		
+
+	}
+
+	return 0;
+}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

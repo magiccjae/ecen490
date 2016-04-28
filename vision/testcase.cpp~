@@ -1,0 +1,42 @@
+#include <stdio.h>
+#include <iostream>
+#include <math.h>
+#include <time.h>
+
+#define MAX_TIMER 10000
+
+int main( int argc, char** argv ) {			
+
+
+int centerXR1 = 0;
+int centerYR1 = 0;
+int angleR1 = 0;
+
+int centerXR2 = 0;
+int centerYR2 = 0;
+int angleR2 = 0;
+
+int centerXE1 = 0;
+int centerYE1 = 0;
+int angleE1 = 0;
+
+int centerXE2 = 0;
+int centerYE2 = 0;
+int angleE2 = 0;
+
+
+int ballX = 0;
+int ballY = 0;
+
+int timer = MAX_TIMER;
+
+	while (1) {
+
+	if (timer == 0) {
+		timer = MAX_TIMER
+		printf("{\"players\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"enemies\": [{\"x\": %f, \"y\": %f, \"w\": %f}, {\"x\": %f, \"y\": %f, \"w\": %f}], \"ball\": {\"x\": %f, \"y\": %f}}\n\n",centerXR1, centerYR1, angleR1, centerXR2, centerYR2, angleR2, centerXE1, centerYE1, angleE1, centerXE2, centerYE2, angleE2, ballX, ballY);	
+		fflush(stdout);
+	}
+	else timer--;
+
+}
